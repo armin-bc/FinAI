@@ -482,8 +482,8 @@ function initToolFunctionality() {
     const downloadBtn = document.getElementById('downloadResultBtn');
     if (downloadBtn) {
       downloadBtn.addEventListener('click', function() {
-        downloadAnalysisResult();
-      });
+      downloadDocxAnalysisResult();
+    });
     }
   }
   
@@ -647,137 +647,176 @@ function renderTrendChart(canvas, chartData) {
     console.error('Invalid chart data or canvas');
     return;
   }
-  
-  // Log the chart data for debugging
-  console.log('Chart data:', JSON.stringify(chartData));
-  
-  // Check for IFO dataset
-  const hasIfoData = chartData.datasets.length > 1 && 
-                    chartData.datasets.some(ds => ds.label && ds.label.includes('IFO'));
-  
-  // Make sure the IFO dataset has proper configuration
+
+  // Filter out FY labels
+  const filteredIndexes = chartData.labels
+    .map((label, i) => ({ label, i }))
+    .filter(entry => !entry.label.startsWith('FY'))
+    .map(entry => entry.i);
+
+  const filteredLabels = filteredIndexes.map(i => chartData.labels[i]);
+  const filteredDatasets = chartData.datasets.map(ds => ({
+    ...ds,
+    data: filteredIndexes.map(i => ds.data[i]),
+    pointRadius: 0,
+    pointHoverRadius: 0
+  }));
+
+  // Shorten labels: Q1 2023 → Q1 23
+  const shortLabels = filteredLabels.map(label => label.replace('202', '2'));
+
+  const hasIfoData = filteredDatasets.length > 1;
+
+  // Apply IFO dataset config
   if (hasIfoData) {
-    const ifoDataset = chartData.datasets.find(ds => ds.label && ds.label.includes('IFO'));
+    const ifoDataset = filteredDatasets.find(ds => ds.label.includes('IFO'));
     if (ifoDataset) {
-      // Check if data values exist and aren't all null
-      const hasValidData = ifoDataset.data && ifoDataset.data.some(value => value !== null && value !== undefined);
-      console.log('IFO dataset has valid data:', hasValidData);
-      
-      // Set yAxisID properly
       ifoDataset.yAxisID = 'y1';
-      
-      // Ensure proper styling
-      ifoDataset.borderColor = ifoDataset.borderColor || '#34A853';
-      ifoDataset.backgroundColor = ifoDataset.backgroundColor || 'rgba(52, 168, 83, 0.2)';
-      
-      // If no valid data but we still want to show the axis
-      if (!hasValidData) {
-        // Add a placeholder value to ensure the axis shows up
-        ifoDataset.data = ifoDataset.data.map(() => null);
-        // Add at least one non-null value to force axis to display
-        if (ifoDataset.data.length > 0) {
-          ifoDataset.data[0] = 0;
-        }
-      }
+      ifoDataset.borderColor = '#34A853';
+      ifoDataset.backgroundColor = 'rgba(52, 168, 83, 0.2)';
     }
   }
-  
-  // Configure chart options
-  const options = {
-    responsive: true,
-    maintainAspectRatio: false,
-    interaction: {
-      mode: 'index',
-      intersect: false,
-    },
-    plugins: {
-      title: {
-        display: true,
-        text: 'Provision for Credit Losses Over Time',
-        font: {
-          size: 16,
-          weight: 'bold'
-        }
-      },
-      tooltip: {
-        enabled: true,
-        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-        callbacks: {
-          label: function(context) {
-            let label = context.dataset.label || '';
-            if (label) {
-              label += ': ';
-            }
-            if (context.parsed.y !== null) {
-              if (context.dataset.label && context.dataset.label.includes('bps')) {
-                label += context.parsed.y + ' bps';
-              } else {
-                label += context.parsed.y.toFixed(2);
-              }
-            }
-            return label;
-          }
-        }
-      },
-      legend: {
-        display: true,
-        position: 'top',
-        labels: {
-          usePointStyle: true,
-          padding: 20
-        }
-      }
-    },
-    scales: {
-      x: {
-        title: {
-          display: true,
-          text: 'Time Period'
-        },
-        grid: {
-          color: 'rgba(0, 0, 0, 0.05)'
-        }
-      },
-      y: {
-        title: {
-          display: true,
-          text: 'Provision for Credit Losses (bps)'
-        },
-        grid: {
-          color: 'rgba(0, 0, 0, 0.05)'
-        },
-        beginAtZero: true
-      }
-    }
-  };
-  
-  // Add second y-axis if IFO data is included
+
+  // Credit Losses axis range
+  const lossDataset = filteredDatasets.find(ds => ds.label.includes('Credit Losses'));
+  const lossValues = lossDataset ? lossDataset.data.filter(v => typeof v === 'number') : [];
+  const lossMin = Math.floor(Math.min(...lossValues) / 5) * 5;
+  const lossMax = Math.ceil(Math.max(...lossValues) / 5) * 5;
+
+  // IFO Index axis range
+  let ifoMin = 70;
+  let ifoMax = 110;
   if (hasIfoData) {
-    options.scales.y1 = {
-      type: 'linear',
-      display: true,
-      position: 'right',
-      title: {
-        display: true,
-        text: 'IFO Business Climate Index'
-      },
-      grid: {
-        drawOnChartArea: false
-      },
-      beginAtZero: false,
-      min: 70,  // Set an appropriate min value for the IFO index
-      max: 110  // Set an appropriate max value for the IFO index
-    };
+    const ifoDataset = filteredDatasets.find(ds => ds.label.includes('IFO'));
+    const ifoValues = ifoDataset ? ifoDataset.data.filter(v => typeof v === 'number') : [];
+    if (ifoValues.length > 0) {
+      ifoMin = Math.floor(Math.min(...ifoValues) / 5) * 5;
+      ifoMax = Math.ceil(Math.max(...ifoValues) / 5) * 5;
+    }
   }
-  
-  // Create chart
+
   const ctx = canvas.getContext('2d');
   new Chart(ctx, {
     type: 'line',
-    data: chartData,
-    options: options
+    data: {
+      labels: shortLabels,
+      datasets: filteredDatasets
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      layout: {
+        padding: {
+          top: 20,
+          bottom: 10
+        }
+      },
+      font: {
+        family: "'Inter', sans-serif"
+      },      
+      interaction: {
+        mode: 'index',
+        intersect: false
+      },
+      plugins: {
+        title: {
+          display: true,
+          text: 'Provision for Credit Losses Over Time',
+          font: {
+            size: 16,
+            weight: 'bold'
+          },
+          padding: {
+            bottom: 40
+          }
+        },
+        legend: {
+          display: false
+        },
+        tooltip: {
+          enabled: true,
+          backgroundColor: 'rgba(0, 0, 0, 0.8)',
+          callbacks: {
+            label: function(context) {
+              let label = context.dataset.label || '';
+              if (label) label += ': ';
+              if (context.parsed.y != null) label += context.parsed.y.toFixed(2);
+              return label;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: '#111827',
+            maxRotation: 45,
+            minRotation: 45
+          },
+          grid: {
+            drawTicks: true,
+            drawOnChartArea: true,
+            color: (ctx) => {
+              const index = ctx.tick?.value;
+              const last = shortLabels.length - 1;
+              return (index === 0 || index === last) ? 'rgba(0,0,0,0.1)' : 'transparent';
+            }
+          }
+        },
+        y: {
+          title: {
+            display: true,
+            text: 'Provision for Credit Losses (bps)',
+            color: '#2563eb',
+            padding: 10
+          },
+          ticks: {
+            color: '#111827',
+            stepSize: 5
+          },
+          grid: {
+            drawTicks: true,
+            drawBorder: true,
+            color: (ctx) => {
+              const value = ctx.tick.value;
+              const ticks = ctx.chart.scales.y.ticks;
+              return (value === ticks[0].value || value === ticks[ticks.length - 1].value)
+                ? 'rgba(0,0,0,0.1)' : 'transparent';
+            }
+          },
+          beginAtZero: false,
+          min: lossMin,
+          max: lossMax
+        },
+        y1: {
+          type: 'linear',
+          display: true,
+          position: 'right',
+          title: {
+            display: true,
+            text: 'IFO Business Climate Index',
+            color: '#34A853',
+            padding: 10
+          },
+          ticks: {
+            color: '#111827',
+            stepSize: 5
+          },
+          grid: {
+            drawOnChartArea: false,
+            drawTicks: true,
+            drawBorder: true
+          },
+          beginAtZero: false,
+          min: ifoMin,
+          max: ifoMax
+        }
+      }
+    },
+    devicePixelRatio: window.devicePixelRatio || 4
   });
 }
+
 
   /**
  * Display analysis results
@@ -974,6 +1013,88 @@ ${results.trend_analysis?.summary || results.trend_analysis?.content || ''}
     URL.revokeObjectURL(url);
   }
   
+/**
+ * Download analysis results as DOCX
+ * Completely rewritten implementation
+ */
+async function downloadDocxAnalysisResult() {
+  try {
+    // Check if docx is available
+    if (typeof window.docx === 'undefined') {
+      alert('Document generation failed: Required library not loaded. Please refresh the page and try again.');
+      return;
+    }
+    
+    const results = toolState.analysisResults;
+    if (!results) return;
+
+    // Create document
+    const doc = new window.docx.Document({
+      sections: [{
+        children: [
+          new window.docx.Paragraph({
+            text: 'BlueNova Bank – Variance Analysis Report',
+            heading: window.docx.HeadingLevel.HEADING_1,
+            spacing: { after: 300 }
+          }),
+          new window.docx.Paragraph(`Segment: ${toolState.segment || 'Not selected'}`),
+          new window.docx.Paragraph(`KPIs: ${Array.from(toolState.kpis).join(', ') || 'None selected'}`),
+          new window.docx.Paragraph(`Date: ${new Date().toLocaleDateString()}`),
+          new window.docx.Paragraph({ text: '', spacing: { after: 200 } }),
+        ]
+      }]
+    });
+
+    const children = doc.sections[0].children;
+
+    // Add analysis sections
+    if (results.variance_analysis?.content) {
+      children.push(
+        new window.docx.Paragraph({ text: 'Variance Analysis', heading: window.docx.HeadingLevel.HEADING_2 }),
+        new window.docx.Paragraph(results.variance_analysis.content)
+      );
+    }
+
+    if (results.trend_analysis?.summary || results.trend_analysis?.content) {
+      children.push(
+        new window.docx.Paragraph({ text: 'Trend Analysis', heading: window.docx.HeadingLevel.HEADING_2 }),
+        new window.docx.Paragraph(results.trend_analysis.summary || results.trend_analysis.content)
+      );
+    }
+
+    // Add chart if available
+    const canvas = document.getElementById('trend-chart');
+    if (canvas) {
+      const dataUrl = canvas.toDataURL('image/png');
+      const blob = await fetch(dataUrl).then(res => res.blob());
+      const buffer = await blob.arrayBuffer();
+
+      children.push(
+        new window.docx.Paragraph({ text: '', spacing: { before: 200 } }),
+        new window.docx.Paragraph({
+          children: [
+            new window.docx.ImageRun({
+              data: buffer,
+              transformation: { width: 600, height: 300 }
+            })
+          ]
+        })
+      );
+    }
+
+    // Generate and download
+    const blob = await window.docx.Packer.toBlob(doc);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'variance-analysis-report.docx';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (error) {
+    console.error('Error generating document:', error);
+    alert('Error generating document. Please try again.');
+  }
+}
+
   // Add CSS styles for analysis results
   addAnalysisStyles();
   
